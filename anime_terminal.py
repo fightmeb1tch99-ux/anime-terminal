@@ -244,7 +244,7 @@ class AnimeTerminal(App):
             info_text += f"Status: {getattr(md, 'anime_status', 'N/A')}\n"
             info_text += f"Rating: {getattr(md, 'shikimori_rating', 'N/A')}\n"
             description = getattr(md, 'description', 'No description available.')
-            info_text += f"Description: {description[:200]}{\'...\' if len(description) > 200 else ''}\n"
+                        info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
 
         self.query_one("#anime_info", Static).update(info_text)
         
