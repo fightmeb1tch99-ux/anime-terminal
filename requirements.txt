@@ -1,0 +1,5 @@
+textual
+anime-parsers-ru
+requests
+fuzzywuzzy
+python-Levenshtein
