@@ -3,6 +3,8 @@ import sys
 import json
 import webbrowser
 import requests
+import re # Added for regex operations
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode # Added for robust URL manipulation
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static, ListView, ListItem, Label, Button, ContentSwitcher
 from textual.containers import Container, Vertical, Horizontal
@@ -244,7 +246,7 @@ class AnimeTerminal(App):
             info_text += f"Status: {getattr(md, 'anime_status', 'N/A')}\n"
             info_text += f"Rating: {getattr(md, 'shikimori_rating', 'N/A')}\n"
             description = getattr(md, 'description', 'No description available.')
-                        info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
+            info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
 
         self.query_one("#anime_info", Static).update(info_text)
         
@@ -299,21 +301,19 @@ class AnimeTerminal(App):
             self.notify("No streaming link available for this anime.", title="Error")
             return
 
-        url = base_url
-        # Kodik links often contain episode= parameter, update it or add it
-        if "episode=" in url:
-            # Use regex to replace the episode number if it exists
-            import re
-            url = re.sub(r"episode=\d+", f"episode={episode_num}", url)
-        else:
-            separator = "?" if "?" not in url else "&"
-            url = f"{url}{separator}episode={episode_num}"
-            
         # Ensure protocol
-        if url.startswith("//"):
-            url = "https:" + url
-        elif not url.startswith("http://") and not url.startswith("https://"):
-            url = "https://" + url # Default to https if no protocol
+        if base_url.startswith("//"):
+            base_url = "https:" + base_url
+        elif not base_url.startswith("http://") and not base_url.startswith("https://"):
+            base_url = "https://" + base_url # Default to https if no protocol
+
+        # Use urllib.parse for robust URL parameter manipulation
+        parsed_url = urlparse(base_url)
+        query_params = parse_qs(parsed_url.query)
+        query_params['episode'] = [episode_num] # Set or update episode parameter
+        new_query = urlencode(query_params, doseq=True)
+        
+        url = urlunparse(parsed_url._replace(query=new_query))
             
         try:
             webbrowser.open(url)
