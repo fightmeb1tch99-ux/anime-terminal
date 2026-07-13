@@ -118,6 +118,7 @@ class AnimeTerminal(App):
         self.selected_translation = None
         self.kodik = KodikSearch()
         self.current_episode_num = None
+        self.selected_result_with_translation = None # Store the full result object for watching
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -181,7 +182,13 @@ class AnimeTerminal(App):
             # Using KodikSearch to find anime
             # Ensure to get a fresh token if not already obtained or expired
             if not self.kodik.token:
-                self.kodik = KodikSearch(token=KodikParser.get_token())
+                # Attempt to get token, if it fails, the search will likely fail too
+                try:
+                    self.kodik = KodikSearch(token=KodikParser.get_token())
+                except Exception as token_e:
+                    results_list.clear()
+                    results_list.append(ListItem(Label(f"Error getting Kodik token: {str(token_e)}")))
+                    return
 
             search_data = self.kodik.title(query).with_material_data().execute()
             self.search_results = search_data.results
@@ -208,7 +215,7 @@ class AnimeTerminal(App):
                 results_list.append(ListItem(Label(f"{title} ({year})"), id=f"anime_{idx}"))
         except Exception as e:
             results_list.clear()
-            results_list.append(ListItem(Label(f"Error: {str(e)}")))
+            results_list.append(ListItem(Label(f"Error during search: {str(e)}")))
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_id = event.list_view.id
@@ -226,7 +233,7 @@ class AnimeTerminal(App):
             item_id = event.item.id
             if item_id and item_id.startswith("ep_"):
                 self.current_episode_num = item_id.split("_")[1]
-                # No automatic watch, user clicks button
+                self.watch_episode(self.current_episode_num) # Automatically watch on selection
 
     def show_anime_details(self, anime_item) -> None:
         self.selected_anime = anime_item
@@ -237,7 +244,7 @@ class AnimeTerminal(App):
             info_text += f"Status: {getattr(md, 'anime_status', 'N/A')}\n"
             info_text += f"Rating: {getattr(md, 'shikimori_rating', 'N/A')}\n"
             description = getattr(md, 'description', 'No description available.')
-            info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
+            info_text += f"Description: {description[:200]}{\'...\' if len(description) > 200 else ''}\n"
 
         self.query_one("#anime_info", Static).update(info_text)
         
@@ -272,6 +279,8 @@ class AnimeTerminal(App):
         
         # Get episode info
         try:
+            # We use the link to determine episodes or use the result data
+            # Kodik results for serials usually have last_episode
             last_ep = int(getattr(res, 'last_episode', 1))
             for i in range(1, last_ep + 1):
                 ep_list.append(ListItem(Label(f"Episode {i}"), id=f"ep_{i}"))
@@ -282,16 +291,20 @@ class AnimeTerminal(App):
 
     def watch_episode(self, episode_num: str) -> None:
         if not self.selected_result_with_translation:
+            self.notify("No anime selected to watch.", title="Error")
             return
 
         base_url = self.selected_result_with_translation.link
         if not base_url:
+            self.notify("No streaming link available for this anime.", title="Error")
             return
 
         url = base_url
         # Kodik links often contain episode= parameter, update it or add it
         if "episode=" in url:
-            url = requests.utils.url_replace(url, "episode", episode_num)
+            # Use regex to replace the episode number if it exists
+            import re
+            url = re.sub(r"episode=\d+", f"episode={episode_num}", url)
         else:
             separator = "?" if "?" not in url else "&"
             url = f"{url}{separator}episode={episode_num}"
@@ -299,8 +312,14 @@ class AnimeTerminal(App):
         # Ensure protocol
         if url.startswith("//"):
             url = "https:" + url
+        elif not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url # Default to https if no protocol
             
-        webbrowser.open(url)
+        try:
+            webbrowser.open(url)
+            self.notify(f"Opening episode {episode_num} in browser...", title="Watching Anime")
+        except Exception as e:
+            self.notify(f"Failed to open browser: {str(e)}", title="Error")
 
     def action_back(self) -> None:
         current = self.query_one("#main_switcher", ContentSwitcher).current
