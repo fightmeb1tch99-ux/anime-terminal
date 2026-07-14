@@ -11,7 +11,7 @@ from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static, ListView, ListItem, Label, Button, ContentSwitcher, ProgressBar
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
-from anime_parsers_ru import KodikSearch, KodikParser, KodikParserAsync
+from anime_parsers_ru import KodikSearch, KodikParserAsync
 
 # Constants for Localization
 LANG_RU = {
@@ -159,6 +159,7 @@ class AnimeTerminal(App):
             self.kodik = KodikSearch(token=token)
         except Exception as e:
             self.notify(f"Failed to get Kodik token: {e}", title="Error")
+            print(f"Token error: {e}")
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -242,7 +243,7 @@ class AnimeTerminal(App):
                     return
 
             search_data = await self.kodik.title(query).with_material_data().execute_async()
-            self.search_results = search_data.results
+            self.search_results = getattr(search_data, 'results', [])
             
             results_list.clear()
             if not self.search_results:
@@ -264,6 +265,7 @@ class AnimeTerminal(App):
         except Exception as e:
             results_list.clear()
             results_list.append(ListItem(Label(f"Error during search: {str(e)}")))
+            print(f"Search error: {e}")
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_id = event.list_view.id
@@ -295,7 +297,7 @@ class AnimeTerminal(App):
             info_text += f"Status: {getattr(md, 'anime_status', 'N/A')}\n"
             info_text += f"Rating: {getattr(md, 'shikimori_rating', 'N/A')}\n"
             description = getattr(md, 'description', 'No description available.')
-            info_text += f"Description: {description[:200]}{\'...\' if len(description) > 200 else ''}\n"
+            info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
 
         self.query_one("#anime_info", Static).update(info_text)
         
@@ -354,7 +356,7 @@ class AnimeTerminal(App):
         if base_url.startswith("//"):
             base_url = "https:" + base_url
         elif not base_url.startswith("http://") and not base_url.startswith("https://"):
-            base_url = "https://" + base_url # Default to https if no protocol
+            base_url = "https://" + base_url
 
         # Use urllib.parse for robust URL parameter manipulation
         parsed_url = urlparse(base_url)
@@ -417,6 +419,7 @@ class AnimeTerminal(App):
             self.notify("yt-dlp not found. Please install it (pip install yt-dlp).", title="Error")
         except Exception as e:
             self.notify(f"{self.lang['download_failed']}: {str(e)}", title="Download Error")
+            print(f"Download error: {e}")
 
     def action_show_downloads(self) -> None:
         self.downloaded_files = []
@@ -459,6 +462,7 @@ class AnimeTerminal(App):
             self.notify(f"Playing {os.path.basename(file_path)} locally.", title="Local Playback")
         except Exception as e:
             self.notify(f"Failed to play local file: {str(e)}", title="Error")
+            print(f"Playback error: {e}")
 
     def action_back(self) -> None:
         current = self.query_one("#main_switcher", ContentSwitcher).current
