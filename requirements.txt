@@ -3,3 +3,4 @@ anime-parsers-ru
 requests
 fuzzywuzzy
 python-Levenshtein
+yt-dlp
