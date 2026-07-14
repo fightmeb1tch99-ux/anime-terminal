@@ -4,12 +4,13 @@ import json
 import webbrowser
 import requests
 import re
+import asyncio # Import asyncio
 from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static, ListView, ListItem, Label, Button, ContentSwitcher
 from textual.containers import Container, Vertical, Horizontal
 from textual.binding import Binding
-from anime_parsers_ru import KodikSearch, KodikParser
+from anime_parsers_ru import KodikSearch, KodikParser, KodikParserAsync # Import KodikParserAsync
 
 # Constants for Localization
 LANG_RU = {
@@ -124,35 +125,16 @@ class AnimeTerminal(App):
         self.selected_result_with_translation = None # Store the full result object for watching
         self.translations_for_selected_anime = [] # Store translations for the selected anime
         self.episodes_for_selected_translation = [] # Store episodes for the selected translation
+        self.kodik_parser_async = KodikParserAsync() # Initialize async parser
 
-    def compose(self) -> ComposeResult:
-        yield Header()
-        with Container(id="main-container"):
-            yield Label(self.lang["title"], classes="title-label")
-            with ContentSwitcher(initial="search_view", id="main_switcher"):
-                with Vertical(id="search_view"):
-                    yield Input(placeholder=self.lang["search_placeholder"], id="search_input")
-                    yield ListView(id="results_list")
-                    with Horizontal(classes="button-container"):
-                        yield Button(self.lang["switch_lang"], id="btn_switch_lang", classes="-first")
-                        yield Button(self.lang["exit"], id="btn_exit", classes="-last")
-                with Vertical(id="detail_view"):
-                    yield Static(id="anime_info", classes="info-panel")
-                    yield ListView(id="translation_list")
-                    with Horizontal(classes="button-container"):
-                        yield Button(self.lang["back"], id="btn_back_detail", classes="-first")
-                        yield Button(self.lang["switch_lang"], id="btn_switch_lang_detail")
-                        yield Button(self.lang["exit"], id="btn_exit_detail", classes="-last")
-                with Vertical(id="episode_view"):
-                    yield Label(self.lang["select_episode"], id="episode_label")
-                    yield ListView(id="episode_list")
-                    with Horizontal(classes="button-container"):
-                        yield Button(self.lang["back"], id="btn_back_episode", classes="-first")
-                        yield Button(self.lang["watch"], id="btn_watch", classes="-last")
-        yield Footer()
-
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.query_one("#search_input").focus()
+        # Attempt to get token asynchronously on mount
+        try:
+            token = await self.kodik_parser_async.get_token()
+            self.kodik = KodikSearch(token=token)
+        except Exception as e:
+            self.notify(f"Failed to get Kodik token: {e}", title="Error")
 
     def action_toggle_language(self) -> None:
         self.lang = LANG_EN if self.lang["current_lang"] == "ru" else LANG_RU
@@ -186,13 +168,15 @@ class AnimeTerminal(App):
         try:
             if not self.kodik.token:
                 try:
-                    self.kodik = KodikSearch(token=KodikParser.get_token())
+                    token = await self.kodik_parser_async.get_token()
+                    self.kodik = KodikSearch(token=token)
                 except Exception as token_e:
                     results_list.clear()
                     results_list.append(ListItem(Label(f"Error getting Kodik token: {str(token_e)}")))
                     return
 
-            search_data = self.kodik.title(query).with_material_data().execute()
+            # Use execute_async for non-blocking API call
+            search_data = await self.kodik.title(query).with_material_data().execute_async()
             self.search_results = search_data.results
             
             results_list.clear()
@@ -211,7 +195,6 @@ class AnimeTerminal(App):
             for item in self.unique_anime_results:
                 title = getattr(item, 'title', 'Unknown')
                 year = getattr(item, 'year', '????')
-                # Removed fixed ID from ListItem
                 results_list.append(ListItem(Label(f"{title} ({year})")))
         except Exception as e:
             results_list.clear()
@@ -220,18 +203,15 @@ class AnimeTerminal(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_id = event.list_view.id
         if list_id == "results_list":
-            # Use index to get the selected anime
             selected_index = event.item.index
             if 0 <= selected_index < len(self.unique_anime_results):
                 self.show_anime_details(self.unique_anime_results[selected_index])
         elif list_id == "translation_list":
-            # Use index to get the selected translation
             selected_index = event.item.index
             if 0 <= selected_index < len(self.translations_for_selected_anime):
                 translation_id = self.translations_for_selected_anime[selected_index][0] # (id, title)
                 self.show_episodes(translation_id)
         elif list_id == "episode_list":
-            # Use index to get the selected episode number
             selected_index = event.item.index
             if 0 <= selected_index < len(self.episodes_for_selected_translation):
                 self.current_episode_num = str(self.episodes_for_selected_translation[selected_index])
@@ -246,7 +226,7 @@ class AnimeTerminal(App):
             info_text += f"Status: {getattr(md, 'anime_status', 'N/A')}\n"
             info_text += f"Rating: {getattr(md, 'shikimori_rating', 'N/A')}\n"
             description = getattr(md, 'description', 'No description available.')
-            info_text += f"Description: {description[:200]}{'...' if len(description) > 200 else ''}\n"
+            info_text += f"Description: {description[:200]}{\'...\' if len(description) > 200 else ''}\n"
 
         self.query_one("#anime_info", Static).update(info_text)
         
@@ -263,7 +243,6 @@ class AnimeTerminal(App):
         self.translations_for_selected_anime = sorted(unique_translations.items(), key=lambda item: item[1])
 
         for tid, ttitle in self.translations_for_selected_anime:
-            # Removed fixed ID from ListItem
             trans_list.append(ListItem(Label(ttitle)))
             
         self.query_one("#main_switcher").current = "detail_view"
@@ -285,7 +264,6 @@ class AnimeTerminal(App):
             last_ep = int(getattr(res, 'last_episode', 1))
             for i in range(1, last_ep + 1):
                 self.episodes_for_selected_translation.append(i)
-                # Removed fixed ID from ListItem
                 ep_list.append(ListItem(Label(f"Episode {i}")))
         except Exception:
             self.episodes_for_selected_translation.append(1)
@@ -343,6 +321,9 @@ class AnimeTerminal(App):
             else:
                 # If no specific episode selected, try to watch the first one or default
                 self.watch_episode("1")
+
+    async def on_quit(self) -> None:
+        await self.kodik_parser_async.close_async_session()
 
 if __name__ == "__main__":
     app = AnimeTerminal()
