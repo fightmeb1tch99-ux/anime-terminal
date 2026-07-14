@@ -3,8 +3,8 @@ import sys
 import json
 import webbrowser
 import requests
-import re # Added for regex operations
-from urllib.parse import urlparse, urlunparse, parse_qs, urlencode # Added for robust URL manipulation
+import re
+from urllib.parse import urlparse, urlunparse, parse_qs, urlencode
 from textual.app import App, ComposeResult
 from textual.widgets import Header, Footer, Input, Static, ListView, ListItem, Label, Button, ContentSwitcher
 from textual.containers import Container, Vertical, Horizontal
@@ -116,11 +116,14 @@ class AnimeTerminal(App):
         super().__init__(**kwargs)
         self.lang = LANG_RU
         self.search_results = []
+        self.unique_anime_results = [] # Store unique anime for selection
         self.selected_anime = None
-        self.selected_translation = None
+        self.selected_translation_id = None
         self.kodik = KodikSearch()
         self.current_episode_num = None
         self.selected_result_with_translation = None # Store the full result object for watching
+        self.translations_for_selected_anime = [] # Store translations for the selected anime
+        self.episodes_for_selected_translation = [] # Store episodes for the selected translation
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -181,10 +184,7 @@ class AnimeTerminal(App):
         results_list.append(ListItem(Label(self.lang["searching"])))
         
         try:
-            # Using KodikSearch to find anime
-            # Ensure to get a fresh token if not already obtained or expired
             if not self.kodik.token:
-                # Attempt to get token, if it fails, the search will likely fail too
                 try:
                     self.kodik = KodikSearch(token=KodikParser.get_token())
                 except Exception as token_e:
@@ -200,21 +200,19 @@ class AnimeTerminal(App):
                 results_list.append(ListItem(Label(self.lang["no_results"])))
                 return
 
-            # Filter to show unique anime titles (Kodik returns multiple for different translations)
             seen_shikimori = set()
-            unique_anime_results = []
+            self.unique_anime_results = []
             for item in self.search_results:
                 sid = getattr(item, 'shikimori_id', None)
                 if sid and sid not in seen_shikimori:
                     seen_shikimori.add(sid)
-                    unique_anime_results.append(item)
+                    self.unique_anime_results.append(item)
             
-            self.search_results = unique_anime_results # Update search_results to only unique ones
-
-            for idx, item in enumerate(self.search_results):
+            for item in self.unique_anime_results:
                 title = getattr(item, 'title', 'Unknown')
                 year = getattr(item, 'year', '????')
-                results_list.append(ListItem(Label(f"{title} ({year})"), id=f"anime_{idx}"))
+                # Removed fixed ID from ListItem
+                results_list.append(ListItem(Label(f"{title} ({year})")))
         except Exception as e:
             results_list.clear()
             results_list.append(ListItem(Label(f"Error during search: {str(e)}")))
@@ -222,19 +220,21 @@ class AnimeTerminal(App):
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_id = event.list_view.id
         if list_id == "results_list":
-            item_id = event.item.id
-            if item_id and item_id.startswith("anime_"):
-                idx = int(item_id.split("_")[1])
-                self.show_anime_details(self.search_results[idx])
+            # Use index to get the selected anime
+            selected_index = event.item.index
+            if 0 <= selected_index < len(self.unique_anime_results):
+                self.show_anime_details(self.unique_anime_results[selected_index])
         elif list_id == "translation_list":
-            item_id = event.item.id
-            if item_id and item_id.startswith("trans_"):
-                translation_id = item_id.split("_")[1]
+            # Use index to get the selected translation
+            selected_index = event.item.index
+            if 0 <= selected_index < len(self.translations_for_selected_anime):
+                translation_id = self.translations_for_selected_anime[selected_index][0] # (id, title)
                 self.show_episodes(translation_id)
         elif list_id == "episode_list":
-            item_id = event.item.id
-            if item_id and item_id.startswith("ep_"):
-                self.current_episode_num = item_id.split("_")[1]
+            # Use index to get the selected episode number
+            selected_index = event.item.index
+            if 0 <= selected_index < len(self.episodes_for_selected_translation):
+                self.current_episode_num = str(self.episodes_for_selected_translation[selected_index])
                 self.watch_episode(self.current_episode_num) # Automatically watch on selection
 
     def show_anime_details(self, anime_item) -> None:
@@ -253,7 +253,6 @@ class AnimeTerminal(App):
         trans_list = self.query_one("#translation_list", ListView)
         trans_list.clear()
         
-        # Get all results for the selected anime's shikimori_id to find all translations
         all_translations_for_anime = [r for r in self.search_results if getattr(r, 'shikimori_id', None) == getattr(anime_item, 'shikimori_id', None)]
         
         unique_translations = {}
@@ -261,14 +260,16 @@ class AnimeTerminal(App):
             if hasattr(r, 'translation') and r.translation:
                 unique_translations[r.translation.id] = r.translation.title
 
-        for tid, ttitle in unique_translations.items():
-            trans_list.append(ListItem(Label(ttitle), id=f"trans_{tid}"))
+        self.translations_for_selected_anime = sorted(unique_translations.items(), key=lambda item: item[1])
+
+        for tid, ttitle in self.translations_for_selected_anime:
+            # Removed fixed ID from ListItem
+            trans_list.append(ListItem(Label(ttitle)))
             
         self.query_one("#main_switcher").current = "detail_view"
 
     def show_episodes(self, translation_id: str) -> None:
-        # Find the specific result for this translation
-        self.selected_translation = translation_id
+        self.selected_translation_id = translation_id
         res = next((r for r in self.search_results if 
                     getattr(r, 'shikimori_id', None) == getattr(self.selected_anime, 'shikimori_id', None) and 
                     str(getattr(r.translation, 'id', '')) == translation_id), None)
@@ -279,15 +280,16 @@ class AnimeTerminal(App):
         ep_list = self.query_one("#episode_list", ListView)
         ep_list.clear()
         
-        # Get episode info
+        self.episodes_for_selected_translation = []
         try:
-            # We use the link to determine episodes or use the result data
-            # Kodik results for serials usually have last_episode
             last_ep = int(getattr(res, 'last_episode', 1))
             for i in range(1, last_ep + 1):
-                ep_list.append(ListItem(Label(f"Episode {i}"), id=f"ep_{i}"))
+                self.episodes_for_selected_translation.append(i)
+                # Removed fixed ID from ListItem
+                ep_list.append(ListItem(Label(f"Episode {i}")))
         except Exception:
-            ep_list.append(ListItem(Label("Episode 1"), id="ep_1")) # Fallback if no episode info
+            self.episodes_for_selected_translation.append(1)
+            ep_list.append(ListItem(Label("Episode 1"))) # Fallback if no episode info
             
         self.query_one("#main_switcher").current = "episode_view"
 
